@@ -16,6 +16,10 @@ import {
   Card,
   CardContent,
   CardHeader,
+  Checkbox,
+  FormControlLabel,
+  FormGroup,
+  CircularProgress,
 } from '@mui/material'
 import { Grid, Stack, Box } from '@mui/system'
 import { Layout as DashboardLayout } from '../../../../layouts/index.js'
@@ -43,7 +47,9 @@ import {
   ArrowUpward,
   ArrowDownward,
   Refresh,
+  Storage,
 } from '@mui/icons-material'
+
 import {
   MenuButtonBold,
   MenuButtonItalic,
@@ -358,6 +364,326 @@ const ReportBlock = ({
   )
 }
 
+/* ── Default excluded headers for database blocks ───────── */
+const DB_DEFAULT_EXCLUDED = ['id', 'rowkey', 'partitionkey', 'etag', 'timestamp']
+
+/* ── DatabaseBlock ────────────────────────────────────────── */
+const DatabaseBlock = ({
+  block,
+  index,
+  totalBlocks,
+  onRemove,
+  onUpdate,
+  onMoveUp,
+  onMoveDown,
+  currentTenant,
+}) => {
+  const [allHeaders, setAllHeaders] = useState(block.allHeaders || [])
+  const processedRef = useRef(false)
+  const prevTenantRef = useRef(currentTenant)
+
+  // Reset processed flag synchronously when tenant changes so new data is always processed
+  if (prevTenantRef.current !== currentTenant) {
+    prevTenantRef.current = currentTenant
+    processedRef.current = false
+  }
+
+  const dbCacheApi = ApiGetCall({
+    url: '/api/ListDBCache',
+    data: { tenantFilter: currentTenant, type: block.dbType },
+    queryKey: `ListDBCache-${currentTenant}-${block.dbType}`,
+    waiting: !!currentTenant && !!block.dbType,
+  })
+
+  // Process results when API data arrives (or is empty)
+  useEffect(() => {
+    if (!dbCacheApi.isSuccess || processedRef.current) return
+    processedRef.current = true
+    const results = dbCacheApi.data?.Results
+    if (!results || (Array.isArray(results) && results.length === 0)) {
+      setAllHeaders([])
+      onUpdate(index, {
+        ...block,
+        data: results ?? [],
+        allHeaders: [],
+        selectedHeaders: [],
+        content: '',
+      })
+      return
+    }
+    const headerSet = new Set()
+    if (Array.isArray(results)) {
+      results.forEach((row) => Object.keys(row).forEach((k) => headerSet.add(k)))
+    } else if (results && typeof results === 'object') {
+      Object.keys(results).forEach((k) => headerSet.add(k))
+    }
+    const headers = [...headerSet].sort()
+    setAllHeaders(headers)
+    const selectedHeaders =
+      block.selectedHeaders && block.selectedHeaders.length > 0
+        ? block.selectedHeaders
+        : headers.filter((h) => !DB_DEFAULT_EXCLUDED.includes(h.toLowerCase()))
+    onUpdate(index, {
+      ...block,
+      data: results,
+      allHeaders: headers,
+      selectedHeaders,
+      content: formatDatabaseContent(results, selectedHeaders, block.format || 'text'),
+    })
+  }, [dbCacheApi.isSuccess, dbCacheApi.data])
+
+  const handleRefresh = () => {
+    processedRef.current = false
+    dbCacheApi.refetch()
+  }
+
+  const error = dbCacheApi.isError
+    ? dbCacheApi.error?.response?.data?.Results ||
+      dbCacheApi.error?.message ||
+      'Failed to fetch data'
+    : null
+
+  const handleHeaderToggle = (header) => {
+    const current = block.selectedHeaders || []
+    const next = current.includes(header)
+      ? current.filter((h) => h !== header)
+      : [...current, header]
+    const newContent = formatDatabaseContent(block.data || [], next, block.format || 'text')
+    onUpdate(index, { ...block, selectedHeaders: next, content: newContent })
+  }
+
+  const handleSelectAll = () => {
+    const newContent = formatDatabaseContent(block.data || [], allHeaders, block.format || 'text')
+    onUpdate(index, { ...block, selectedHeaders: [...allHeaders], content: newContent })
+  }
+
+  const handleDeselectAll = () => {
+    onUpdate(index, { ...block, selectedHeaders: [], content: '' })
+  }
+
+  const handleFormatChange = (newFormat) => {
+    const newContent = formatDatabaseContent(
+      block.data || [],
+      block.selectedHeaders || [],
+      newFormat
+    )
+    onUpdate(index, { ...block, format: newFormat, content: newContent })
+  }
+
+  const dbTypeLabel = block.title || block.dbType
+
+  return (
+    <CippButtonCard
+      title={
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Storage fontSize="small" color="primary" />
+          <Typography variant="subtitle2" fontWeight={600}>
+            {block.title || dbTypeLabel}
+          </Typography>
+          <Chip label="Database" size="small" color="primary" variant="outlined" />
+          <Chip
+            label={(block.format || 'text').toUpperCase()}
+            size="small"
+            color="secondary"
+            variant="outlined"
+          />
+          {Array.isArray(block.data) && block.data.length > 0 && (
+            <Chip label={`${block.data.length} rows`} size="small" variant="outlined" />
+          )}
+        </Box>
+      }
+      cardActions={
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <Tooltip title="Refresh data">
+            <IconButton
+              size="small"
+              onClick={handleRefresh}
+              disabled={dbCacheApi.isFetching || !currentTenant}
+            >
+              {dbCacheApi.isFetching ? (
+                <CircularProgress size={16} />
+              ) : (
+                <Refresh fontSize="small" />
+              )}
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Move up">
+            <span>
+              <IconButton size="small" onClick={() => onMoveUp(index)} disabled={index === 0}>
+                <ArrowUpward fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Move down">
+            <span>
+              <IconButton
+                size="small"
+                onClick={() => onMoveDown(index)}
+                disabled={index === totalBlocks - 1}
+              >
+                <ArrowDownward fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Remove block">
+            <IconButton size="small" color="error" onClick={() => onRemove(index)}>
+              <Delete fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      }
+    >
+      {error && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          {error}
+        </Alert>
+      )}
+      {(dbCacheApi.isFetching ||
+        (!!currentTenant && !!block.dbType && !dbCacheApi.isSuccess && !dbCacheApi.isError)) && (
+        <Stack spacing={1}>
+          <Skeleton variant="text" width="80%" />
+          <Skeleton variant="text" width="60%" />
+          <Skeleton variant="rounded" height={60} />
+        </Stack>
+      )}
+      {!dbCacheApi.isFetching && dbCacheApi.isSuccess && block.data && allHeaders.length > 0 && (
+        <Box sx={{ mb: 2 }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+            <Typography variant="caption" fontWeight={600}>
+              Format:
+            </Typography>
+            {['text', 'csv', 'json'].map((fmt) => (
+              <Chip
+                key={fmt}
+                label={fmt.toUpperCase()}
+                size="small"
+                color={block.format === fmt ? 'primary' : 'default'}
+                onClick={() => handleFormatChange(fmt)}
+                variant={block.format === fmt ? 'filled' : 'outlined'}
+                sx={{ cursor: 'pointer' }}
+              />
+            ))}
+          </Stack>
+          <Typography variant="caption" fontWeight={600} sx={{ mb: 0.5, display: 'block' }}>
+            Columns ({(block.selectedHeaders || []).length}/{allHeaders.length}):
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ mb: 0.5 }}>
+            <Button size="small" variant="text" onClick={handleSelectAll}>
+              Select All
+            </Button>
+            <Button size="small" variant="text" onClick={handleDeselectAll}>
+              Deselect All
+            </Button>
+          </Stack>
+          <FormGroup row sx={{ maxHeight: 120, overflow: 'auto' }}>
+            {allHeaders.map((header) => (
+              <FormControlLabel
+                key={header}
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={(block.selectedHeaders || []).includes(header)}
+                    onChange={() => handleHeaderToggle(header)}
+                  />
+                }
+                label={<Typography variant="caption">{header}</Typography>}
+                sx={{ mr: 2 }}
+              />
+            ))}
+          </FormGroup>
+        </Box>
+      )}
+      {!dbCacheApi.isFetching && dbCacheApi.isSuccess && block.data && block.content && (
+        <Box sx={{ maxHeight: 300, overflow: 'auto' }}>
+          {block.format === 'text' ? (
+            <Box sx={markdownStyles}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.content}</ReactMarkdown>
+            </Box>
+          ) : (
+            <Box
+              component="pre"
+              sx={{
+                fontSize: '0.75rem',
+                backgroundColor: 'action.hover',
+                p: 1.5,
+                borderRadius: 1,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+              }}
+            >
+              {block.content}
+            </Box>
+          )}
+        </Box>
+      )}
+      {!dbCacheApi.isFetching && dbCacheApi.isSuccess && block.data && !block.content && (
+        <Typography color="text.secondary" variant="body2">
+          No data available for this tenant.
+        </Typography>
+      )}
+      {!dbCacheApi.isFetching && !dbCacheApi.isSuccess && !error && (
+        <Typography color="text.secondary" variant="body2">
+          {currentTenant ? 'Loading database data...' : 'Select a tenant to load database data.'}
+        </Typography>
+      )}
+    </CippButtonCard>
+  )
+}
+
+/* ── Format database content helper ─────────────────────── */
+const formatDatabaseContent = (data, selectedHeaders, format) => {
+  if (!data || !selectedHeaders || selectedHeaders.length === 0) return ''
+
+  // Normalize: data can be an array of rows or a single object
+  const rows = Array.isArray(data) ? data : [data]
+  if (rows.length === 0) return ''
+
+  const filtered = rows.map((row) => {
+    const obj = {}
+    selectedHeaders.forEach((h) => {
+      obj[h] = row[h] !== undefined && row[h] !== null ? row[h] : ''
+    })
+    return obj
+  })
+
+  if (format === 'json') {
+    return JSON.stringify(Array.isArray(data) ? filtered : filtered[0], null, 2)
+  }
+
+  if (format === 'csv') {
+    const escaped = (val) => {
+      const str = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '')
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`
+      }
+      return str
+    }
+    const header = selectedHeaders.map(escaped).join(',')
+    const dataRows = filtered.map((row) => selectedHeaders.map((h) => escaped(row[h])).join(','))
+    return [header, ...dataRows].join('\n')
+  }
+
+  // text format — generate a Markdown table
+  const header = '| ' + selectedHeaders.join(' | ') + ' |'
+  const separator = '| ' + selectedHeaders.map(() => '---').join(' | ') + ' |'
+  const dataRows = filtered.map((row) => {
+    return (
+      '| ' +
+      selectedHeaders
+        .map((h) => {
+          const val = row[h]
+          if (val === null || val === undefined) return ''
+          if (typeof val === 'object') return JSON.stringify(val)
+          return String(val).replace(/\|/g, '\\|').replace(/\n/g, ' ')
+        })
+        .join(' | ') +
+      ' |'
+    )
+  })
+  return [header, separator, ...dataRows].join('\n')
+}
+
 /* ── Page ─────────────────────────────────────────────────── */
 const Page = () => {
   const router = useRouter()
@@ -386,9 +712,18 @@ const Page = () => {
 
   const saveForm = useForm({ defaultValues: { templateName: '' } })
   const addBlockForm = useForm({
-    defaultValues: { blockType: null, testSuite: null, selectedTest: [] },
+    defaultValues: {
+      blockType: null,
+      testSuite: null,
+      selectedTest: [],
+      dbCacheType: null,
+      dbFormat: null,
+    },
   })
-  const settingsForm = useForm({ defaultValues: { removeRemediation: true } })
+  const settingsForm = useForm({
+    defaultValues: { removeRemediation: true, includeRawAttachments: false },
+  })
+  const hasDatabaseBlocks = blocks.some((b) => b.type === 'database')
   const scheduleForm = useForm({
     defaultValues: { scheduleName: '', recurrence: null, postExecution: [] },
   })
@@ -396,12 +731,30 @@ const Page = () => {
   const watchBlockType = useWatch({ control: addBlockForm.control, name: 'blockType' })
   const watchTestSuite = useWatch({ control: addBlockForm.control, name: 'testSuite' })
   const watchSelectedTest = useWatch({ control: addBlockForm.control, name: 'selectedTest' })
+  const watchDbCacheType = useWatch({ control: addBlockForm.control, name: 'dbCacheType' })
+  const watchDbFormat = useWatch({ control: addBlockForm.control, name: 'dbFormat' })
   const removeRemediation = useWatch({ control: settingsForm.control, name: 'removeRemediation' })
+
+  // Fetch available DB cache types dynamically when tenant changes
+  const availableCacheTypesApi = ApiGetCall({
+    url: '/api/ListDBCache',
+    data: { tenantFilter: currentTenant, type: '_availableTypes' },
+    queryKey: `ListDBCache-availableTypes-${currentTenant}`,
+    waiting: !!currentTenant,
+  })
+
+  const availableCacheTypes = useMemo(() => {
+    if (!availableCacheTypesApi.isSuccess || !availableCacheTypesApi.data?.Results) return []
+    const types = availableCacheTypesApi.data.Results
+    return (Array.isArray(types) ? types : []).map((t) => ({ label: t, value: t }))
+  }, [availableCacheTypesApi.isSuccess, availableCacheTypesApi.data])
 
   // When block type changes, reset suite and test selections.
   useEffect(() => {
     addBlockForm.setValue('testSuite', null, { shouldDirty: false, shouldValidate: false })
     addBlockForm.setValue('selectedTest', [], { shouldDirty: false, shouldValidate: false })
+    addBlockForm.setValue('dbCacheType', null, { shouldDirty: false, shouldValidate: false })
+    addBlockForm.setValue('dbFormat', null, { shouldDirty: false, shouldValidate: false })
   }, [watchBlockType])
 
   // When test suite changes, reset test selection.
@@ -571,10 +924,18 @@ const Page = () => {
           content:
             b.type === 'blank'
               ? b.content || ''
-              : b.type === 'test' && !b.static
-                ? getTestContent(b.testId)
-                : b.content || '',
+              : b.type === 'database'
+                ? b.content || ''
+                : b.type === 'test' && !b.static
+                  ? getTestContent(b.testId)
+                  : b.content || '',
           status: b.type === 'test' ? b.status || getTestStatus(b.testId) : undefined,
+          // Preserve database block metadata
+          data: b.type === 'database' ? b.data || null : undefined,
+          allHeaders: b.type === 'database' ? b.allHeaders || [] : undefined,
+          selectedHeaders: b.type === 'database' ? b.selectedHeaders || [] : undefined,
+          dbType: b.dbType || undefined,
+          format: b.format || undefined,
         }))
       } catch {
         templateBlocks = []
@@ -602,7 +963,13 @@ const Page = () => {
           static: false,
         },
       ])
-      addBlockForm.reset({ blockType: null, testSuite: null, selectedTest: [] })
+      addBlockForm.reset({
+        blockType: null,
+        testSuite: null,
+        selectedTest: [],
+        dbCacheType: null,
+        dbFormat: null,
+      })
     } else if (type.value === 'test') {
       const tests = addBlockForm.getValues('selectedTest')
       const testArray = Array.isArray(tests) ? tests : tests ? [tests] : []
@@ -620,7 +987,40 @@ const Page = () => {
           static: false,
         })),
       ])
-      addBlockForm.reset({ blockType: null, testSuite: null, selectedTest: [] })
+      addBlockForm.reset({
+        blockType: null,
+        testSuite: null,
+        selectedTest: [],
+        dbCacheType: null,
+        dbFormat: null,
+      })
+    } else if (type.value === 'database') {
+      const dbType = addBlockForm.getValues('dbCacheType')
+      const dbFormat = addBlockForm.getValues('dbFormat')
+      if (!dbType?.value || !dbFormat?.value) return
+      const friendlyName = dbType.label || dbType.value
+      setBlocks((prev) => [
+        ...prev,
+        {
+          id: `block-${Date.now()}`,
+          type: 'database',
+          dbType: dbType.value,
+          format: dbFormat.value,
+          title: friendlyName,
+          content: '',
+          data: null,
+          allHeaders: [],
+          selectedHeaders: [],
+          static: false,
+        },
+      ])
+      addBlockForm.reset({
+        blockType: null,
+        testSuite: null,
+        selectedTest: [],
+        dbCacheType: null,
+        dbFormat: null,
+      })
     }
   }
 
@@ -675,9 +1075,19 @@ const Page = () => {
           testId: b.testId || null,
           testCategory: b.testCategory || null,
           title: b.title,
-          content: b.type === 'blank' ? b.content : b.static ? b.content : null,
+          content:
+            b.type === 'blank'
+              ? b.content
+              : b.type === 'database'
+                ? b.content
+                : b.static
+                  ? b.content
+                  : null,
           status: b.status || null,
-          static: b.type === 'blank' ? true : b.static,
+          static: b.type === 'blank' ? true : b.type === 'database' ? true : b.static,
+          dbType: b.dbType || null,
+          format: b.format || null,
+          selectedHeaders: b.selectedHeaders || null,
         })),
       },
     })
@@ -698,15 +1108,27 @@ const Page = () => {
         parameters: {
           TemplateName: name,
           TenantFilter: currentTenant,
+          IncludeRawAttachments:
+            settingsForm.getValues('includeRawAttachments') && hasDatabaseBlocks ? 'true' : 'false',
           Blocks: JSON.stringify(
             blocks.map((b) => ({
               type: b.type,
               testId: b.testId || null,
               testCategory: b.testCategory || null,
               title: b.title,
-              content: b.type === 'blank' ? b.content : b.static ? b.content : null,
+              content:
+                b.type === 'blank'
+                  ? b.content
+                  : b.type === 'database'
+                    ? b.content
+                    : b.static
+                      ? b.content
+                      : null,
               status: b.status || null,
-              static: b.type === 'blank' ? true : b.static,
+              static: b.type === 'blank' ? true : b.type === 'database' ? true : b.static,
+              dbType: b.dbType || null,
+              format: b.format || null,
+              selectedHeaders: b.selectedHeaders || null,
             }))
           ),
         },
@@ -753,7 +1175,9 @@ const Page = () => {
   const addDisabled =
     !watchBlockType ||
     (watchBlockType?.value === 'test' &&
-      (!watchSelectedTest || (Array.isArray(watchSelectedTest) && watchSelectedTest.length === 0)))
+      (!watchSelectedTest ||
+        (Array.isArray(watchSelectedTest) && watchSelectedTest.length === 0))) ||
+    (watchBlockType?.value === 'database' && (!watchDbCacheType?.value || !watchDbFormat?.value))
 
   /* ── Resolve live test blocks with current data for PDF ── */
   const displayBlocks = blocks.map((block) =>
@@ -902,6 +1326,7 @@ const Page = () => {
                     options={[
                       { label: 'Custom Block', value: 'blank' },
                       { label: 'Test Result', value: 'test' },
+                      { label: 'Database Data', value: 'database' },
                     ]}
                   />
                 </Grid>
@@ -936,6 +1361,39 @@ const Page = () => {
                     />
                   </Grid>
                 </CippFormCondition>
+                <CippFormCondition
+                  field="blockType"
+                  compareType="valueEq"
+                  compareValue="database"
+                  formControl={addBlockForm}
+                  clearOnHide={false}
+                >
+                  <Grid size={{ xs: 12, md: 3 }}>
+                    <CippFormComponent
+                      type="autoComplete"
+                      name="dbCacheType"
+                      label="Data Source"
+                      formControl={addBlockForm}
+                      multiple={false}
+                      options={availableCacheTypes}
+                      isFetching={availableCacheTypesApi.isFetching}
+                    />
+                  </Grid>
+                  <Grid size={{ xs: 12, md: 2 }}>
+                    <CippFormComponent
+                      type="autoComplete"
+                      name="dbFormat"
+                      label="Format"
+                      formControl={addBlockForm}
+                      multiple={false}
+                      options={[
+                        { label: 'Table (Text)', value: 'text' },
+                        { label: 'CSV', value: 'csv' },
+                        { label: 'JSON', value: 'json' },
+                      ]}
+                    />
+                  </Grid>
+                </CippFormCondition>
                 <Grid size={{ xs: 12, md: 2 }}>
                   <Button
                     variant="outlined"
@@ -947,7 +1405,9 @@ const Page = () => {
                     Add Block
                   </Button>
                 </Grid>
-                <Grid size={{ xs: 12, md: 3 }} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+              </Grid>
+              <Grid container spacing={2} sx={{ mt: 1 }}>
+                <Grid size={{ xs: 12, md: 4 }}>
                   <CippFormComponent
                     type="switch"
                     name="removeRemediation"
@@ -955,6 +1415,16 @@ const Page = () => {
                     formControl={settingsForm}
                   />
                 </Grid>
+                {hasDatabaseBlocks && (
+                  <Grid size={{ xs: 12, md: 4 }}>
+                    <CippFormComponent
+                      type="switch"
+                      name="includeRawAttachments"
+                      label="Include database items as email attachment"
+                      formControl={settingsForm}
+                    />
+                  </Grid>
+                )}
               </Grid>
             </CippButtonCard>
 
@@ -975,6 +1445,22 @@ const Page = () => {
                           status: getTestStatus(block.testId),
                         }
                       : block
+
+                  if (block.type === 'database') {
+                    return (
+                      <DatabaseBlock
+                        key={block.id}
+                        block={displayBlock}
+                        index={index}
+                        totalBlocks={blocks.length}
+                        onRemove={handleRemoveBlock}
+                        onUpdate={handleUpdateBlock}
+                        onMoveUp={handleMoveBlockUp}
+                        onMoveDown={handleMoveBlockDown}
+                        currentTenant={currentTenant}
+                      />
+                    )
+                  }
                   return (
                     <ReportBlock
                       key={block.id}
@@ -1006,7 +1492,9 @@ const Page = () => {
         <DialogTitle
           sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
         >
-          <Typography variant="h6">Report Preview</Typography>
+          <Typography variant="h6" component="div">
+            Report Preview
+          </Typography>
           <IconButton onClick={() => setPreviewOpen(false)} size="small">
             <Close />
           </IconButton>

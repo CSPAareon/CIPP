@@ -63,11 +63,13 @@ export const CippReportToolbar = () => {
     })
   }
 
-  const isBuiltIn = reports.find((r) => r.id === selectedReport)?.source === 'file'
+  const selectedReportObject = reports.find((r) => r.id === selectedReport)
+  const isBuiltIn = selectedReportObject?.source === 'file'
+  const selectedCustomReport = selectedReportObject?.type === 'custom' ? selectedReportObject : null
 
   return (
     <>
-      <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+      <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', width: '100%' }}>
         <Box sx={{ flex: 1 }}>
           <CippFormComponent
             name="reportId"
@@ -123,6 +125,19 @@ export const CippReportToolbar = () => {
         </Button>
         <Tooltip
           title={
+            isBuiltIn ? 'Built-in test suites cannot be edited' : 'Edit this custom test suite'
+          }
+          arrow
+        >
+          <CippAddTestReportDrawer
+            buttonText="Edit"
+            mode="edit"
+            reportToEdit={selectedCustomReport}
+            disabled={!selectedCustomReport}
+          />
+        </Tooltip>
+        <Tooltip
+          title={
             isBuiltIn ? 'Built-in test suites cannot be deleted' : 'Delete this custom test suite'
           }
           arrow
@@ -159,13 +174,13 @@ export const CippReportToolbar = () => {
 
       <CippApiDialog
         createDialog={deleteDialog}
-        title="Delete Custom Report"
+        title="Delete Custom Test Suite"
         fields={[]}
         api={{
           url: '/api/DeleteTestReport',
           type: 'POST',
           data: { ReportId: selectedReport },
-          confirmText: 'Are you sure you want to delete this report? This action cannot be undone.',
+          confirmText: 'Are you sure you want to delete this test suite? This action cannot be undone.',
           relatedQueryKeys: ['ListTestReports'],
         }}
       />
